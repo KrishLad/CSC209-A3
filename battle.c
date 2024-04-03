@@ -1,200 +1,253 @@
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <unistd.h>
+#include <signal.h>
+#include <errno.h>
+#include <assert.h>
 #include <sys/socket.h>
-#include <sys/time.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <netinet/in.h>    /* Internet domain header */
+#include <arpa/inet.h>     /* only needed on mac */
 
+#include "helpers.h"
+#include "client.h"
 
-//Define the port on make file
-#ifndef PORT
-//Using My (Krishna's) Student Number as the default port. (We can change this with the make file as we wish)
-#define PORT 54640 
-#endif
+int sigint_received = 0;
 
-// make a client struct. 
-struct client{ 
-    int fd; //file descriptor for the client
-    char name[256];
-    struct in_addr ipaddr;
-    struct client *next;
-};
-
-int bind_and_listen(void){
-    struct sockaddr_in server; 
-    int listenfd;
-    
-    //sets up a socket (still doesn't have binding yet)
-    if((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
-        perror("socket");
-        exit(1);
-    }
-
-    // Make sure the the server the OS lets go of the port
-    int yes = 1;
-    if ((setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))) == -1)
-    {
-        perror("setsockopt");
-    }
-
-    // Setting up server for binding
-    memset(&server, '\0', sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_port = htons(PORT); //if there is an error its because this will be defined on compile time
-
-    //Binding the socket to an address.
-    if (bind(listenfd, (struct sockaddr *)&server, sizeof(server))){
-        perror("bind");
-        exit(1);
-    }
-
-    if (listen(listenfd,5)){
-        perror("listen");
-        exit(1);
-    }
-
-    return listenfd;
+void sigint_handler(int code) {
+    sigint_received = 1;
 }
 
-static struct client *addclient (struct client *top, int fd, struct in_addr addr){
-    int error;
-    struct client *tmp = top;
-    // make space for new client
-    struct client *p = malloc(sizeof(struct client));
-    if (!p)
-    {
-        perror("malloc");
+/*
+ * Close all sockets, free memory, and exit with specified exit status.
+ */
+void clean_exit(struct listen_sock s, struct client_sock *clients, int exit_status) {
+    struct client_sock *tmp;
+    while (clients) {
+        tmp = clients;
+        close(tmp->sock_fd);
+        clients = clients->next;
+        free(tmp->username);
+        free(tmp);
+    }
+    close(s.sock_fd);
+    free(s.addr);
+    exit(exit_status);
+}
+
+int main() {
+
+    // This line causes stdout not to be buffered.
+    // Don't change this! Necessary for autotesting.
+    setbuf(stdout, NULL);
+
+    /*
+     * Turn off SIGPIPE: write() to a socket that is closed on the other
+     * end will return -1 with errno set to EPIPE, instead of generating
+     * a SIGPIPE signal that terminates the process.
+     */
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal");
         exit(1);
     }
 
-    printf("Adding client %s\n", inet_ntoa(addr));
+    // Linked list of clients
+    struct client_sock *clients = NULL;
 
-    p->fd = fd;
-    p->ipaddr = addr;
-    p->next = top;
-    (p->name)[0] = '\0';
-    const char *welcome_message = "Welcome to the realm of magic and wonder! Pray tell, traveler, what name doth thou bear? For in this mystical land, every soul's name holds the key to unlocking the enchantments that await. 🌟🔮\r\n";
+    struct listen_sock s;
+    setup_server_socket(&s);
 
+    // Set up SIGINT handler
+    struct sigaction sa_sigint;
+    memset (&sa_sigint, 0, sizeof (sa_sigint));
+    sa_sigint.sa_handler = sigint_handler;
+    sa_sigint.sa_flags = 0;
+    sigemptyset(&sa_sigint.sa_mask);
+    sigaction(SIGINT, &sa_sigint, NULL);
 
-    error = write(fd, welcome_message,strlen(welcome_message)+1);
-    if (error != strlen(welcome_message)+1){
-        perror("write[inside addclient]");
-        exit(EXIT_FAILURE);
-    }
+    int exit_status = 0;
 
-    if (top == NULL){ //if the top is empty
-        top = p;
-        return top;
-    }
+    int max_fd = s.sock_fd;
 
-    while(tmp->next != NULL){ //add that boy to the back to of the list
-        tmp = tmp->next;
-    }
-    tmp->next = p;
-    return top;
-}
+    fd_set all_fds, listen_fds;
 
-static struct client *removeclient(struct client *top, int fd)
-{
-    struct client **p;
+    FD_ZERO(&all_fds);
+    FD_SET(s.sock_fd, &all_fds);
 
-    for (p = &top; *p && (*p)->fd != fd; p = &(*p)->next)
-        ;
-    // Now, p points to (1) top, or (2) a pointer to another client
-    // This avoids a special case for removing the head of the list
-    if (*p)
-    {
-        struct client *t = (*p)->next;
-        printf("Removing client %d %s\n", fd, inet_ntoa((*p)->ipaddr));
-        free(*p);
-        *p = t;
-    }
-    else
-    {
-        fprintf(stderr, "Trying to remove fd %d, but I don't know about it\n",
-                fd);
-    }
-    return top;
-}
-
-int main(void) {
-    int clientfd, maxfd, nready;
-    struct client *p; //used to access the list
-    struct client *head = NULL;
-    socklen_t len;
-    struct sockaddr_in q;
-    fd_set allset;
-    fd_set rset;
-    int i;
-    // Get the server
-    int listenfd = bind_and_listen(); 
-
-    // init allset and add the server to the set of the file descriptors passed into select
-
-    FD_ZERO(&allset);
-    FD_SET(listenfd, &allset);
-    // maxfd is  how far into the set to search
-    maxfd = listenfd;
-
-    while(1){
-        //make a copy of the set before we pass into select
-        rset = allset; 
-
-        nready = select(maxfd + 1, &rset, NULL, NULL, NULL);
-
-        if (nready == 0){ // nothing happened 
-            continue;
+    do {
+        listen_fds = all_fds;
+        int nready = select(max_fd + 1, &listen_fds, NULL, NULL, NULL);
+        if (sigint_received) break;
+        if (nready == -1) {
+            if (errno == EINTR) continue;
+            perror("server: select");
+            exit_status = 1;
+            break;
         }
 
-        if (nready == -1){ //error happened and terminate 
-            perror("select");
-            continue;
-        }
-        
-        // 
-        if(FD_ISSET(listenfd, &rset)){ //FD_ISSET returns 1 on new connection so this checks for a new connection 
-
-        len = sizeof(q); 
-        if ((clientfd = accept(listenfd, (struct sockaddr*) &q, &len)) < 0){ //accepts the connection from the client
-            perror("accept");
-            exit(1);
-        }
-        FD_SET(clientfd, &allset); //add the jit that wanted to connect to the set of all FDs
-
-        if(clientfd > maxfd){
-            maxfd = clientfd; //updates maxfile descriptor
-        }
-        printf("A jit joined from %s\n", inet_ntoa(q.sin_addr));
-
-        head = addclient(head, clientfd, q.sin_addr); //add the mfer to the client list
+        /*
+         * If a new client is connecting, create new
+         * client_sock struct and add to clients linked list.
+         */
+        if (FD_ISSET(s.sock_fd, &listen_fds)) {
+            int client_fd = accept_connection(s.sock_fd, &clients);
+            if (client_fd < 0) {
+                printf("Failed to accept incoming connection.\n");
+                continue;
+            }
+            if (client_fd > max_fd) {
+                max_fd = client_fd;
+            }
+            FD_SET(client_fd, &all_fds);
+            printf("Accepted connection\n");
+            char *question = "What is your name? ";
+            write(client_fd, question, strlen(question));
         }
 
-        //update everyone else on the situation by looping through the set
-        // for (i = 0; i <= maxfd; i++)
-        // {
-        //     if (FD_ISSET(i, &rset))
-        //     {
-        //         for (p = head; p != NULL; p = p->next)
-        //         {
-        //             if (p->fd == i)
-        //             {
-        //                 int result = handleclient(p, head);
-        //                 if (result == -1)
-        //                 {
-        //                     int tmp_fd = p->fd;
-        //                     head = removeclient(head, p->fd);
-        //                     FD_CLR(tmp_fd, &allset);
-        //                     close(tmp_fd);
-        //                 }
-        //                 break;
-        //             }
-        //         }
+        if (sigint_received) break;
+
+        /*
+         * Accept incoming messages from clients,
+         * and send to all other connected clients.
+         */
+        struct client_sock *curr = clients;
+        while (curr) {
+            if (!FD_ISSET(curr->sock_fd, &listen_fds)) {
+                curr = curr->next;
+                continue;
+            }
+            int client_closed = read_from_client(curr);
+
+            // If error encountered when receiving data
+            if (client_closed == -1) {
+                client_closed = 1; // Disconnect the client
+            }
+
+            // If received at least one complete message
+            // and client is newly connected: Get username
+            if (client_closed == 0 && curr->username == NULL) {
+                if (set_username(curr)) {
+                    printf("Error processing user name from client %d.\n", curr->sock_fd);
+                    client_closed = 1; // Disconnect the client
+                }
+                else {
+                    printf("Client %d user name is %s.\n", curr->sock_fd, curr->username);
+                    curr->state = 1; //player is ready to play
+                }
+            }
+
+            //FROM HERE DOWN SHOULD BE IN GAME LOGIC! MEANING BEFORE THIS WE NEED TO FIND GAME STATE AND START GAME. IN WHILE LOOP?
+
+            // char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
+            // // Loop through buffer to get complete message(s)
+            // char msg_buf[BUF_SIZE];
+            // memset(msg_buf, 0, BUF_SIZE); 
+            // strncat(msg_buf, message, MAX_USER_MSG);
+
+            // struct client_sock *dest_c = clients;
+            // while (dest_c) {
+            //     // Only attempt to send if the client hasn't received a message yet
+            //     if (dest_c != curr && dest_c->state != 1) {
+            //         if (write_buf_to_client(dest_c, msg_buf, strlen(msg_buf)) == 0) {
+            //             dest_c->state = 1; // Mark as message sent
+            //             printf("Sent message from %s (%d) to %s (%d).\n",
+            //                 curr->username, curr->sock_fd,
+            //                 dest_c->username, dest_c->sock_fd);
+            //         } else {
+            //             // Handle failed send, possibly resetting state or taking other action
+            //             printf("Couldn't send message.");
+            //         }
+            //     }
+
+            //     dest_c = dest_c->next;
+            // }           
+
+            // char *msg;
+            // while (client_closed == 0 && !get_message(&msg, curr->buf, &(curr->inbuf))) {
+            //     printf("Echoing message from %s: %s\n", curr->username, msg);
+            //     char write_buf[BUF_SIZE];
+            //     memset(write_buf, 0, BUF_SIZE);
+            //     // write_buf[0] = '\0';
+            //     strncat(write_buf, curr->username, MAX_NAME);
+            //     strncat(write_buf, ": ", MAX_NAME);
+            //     strncat(write_buf, msg, MAX_USER_MSG);
+            //     strncat(write_buf, "\n", MAX_USER_MSG);
+            //     free(msg);
+            //     int data_len = strlen(write_buf);
+
+            //     struct client_sock *dest_c = clients;
+            //     while (dest_c) {
+            //         if (dest_c != curr) {
+            //             int ret = write_buf_to_client(dest_c, write_buf, data_len);
+            //             if (ret == 0) {
+            //                 printf("Sent message from %s (%d) to %s (%d).\n",
+            //                     curr->username, curr->sock_fd,
+            //                     dest_c->username, dest_c->sock_fd);
+            //             }
+            //             else {
+            //                 printf("Failed to send message to user %s (%d).\n", dest_c->username, dest_c->sock_fd);
+            //                 if (ret == 2) {
+            //                     printf("User %s (%d) disconnected.\n", dest_c->username, dest_c->sock_fd);
+            //                     close(dest_c->sock_fd);
+            //                     FD_CLR(dest_c->sock_fd, &all_fds);
+            //                     assert(remove_client(&dest_c, &clients) == 0); // If this fails we have a bug
+            //                     continue;
+            //                 }
+            //             }
+            //         }
+            //         dest_c = dest_c->next;
+            //     }
+            // }
+
+            if (client_closed == 1) { // Client disconnected
+                // Note: Never reduces max_fd when client disconnects
+                FD_CLR(curr->sock_fd, &all_fds);
+                close(curr->sock_fd);
+                printf("Client %d disconnected\n", curr->sock_fd);
+                assert(remove_client(&curr, &clients) == 0); // If this fails we have a bug
+            }
+            else {
+                curr = curr->next;
+            }
+        }
+
+        //find the players for the next game
+        struct client_sock *p1 = NULL;
+        struct client_sock *p2 = NULL;
+        find_players(clients, &p1, &p2);
+        if (p1 != NULL && p2 != NULL) {
+            printf("Player 1: %s\n", p1->username);
+            printf("Player 2: %s\n", p2->username);
+        }
+
+        //play the game!
+        // int power1 = 20;
+        // int power2 = 20;
+        // struct client_sock *curr = p1;
+        // int client_closed;
+        // char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
+        // char *tryagain = "Try again.\n(a) Regular move\n(p) Power move\n(s) Say something\n";
+        // char *terminated;
+        // while (power1 > 0 || power2 > 0) {
+            
+        //     //send the message to the player
+        //     write(curr->sock_fd, message, strlen(message));
+
+        //     //while we run into an error getting the message, re prompt
+        //     client_closed = read_from_client(curr);
+        //     while (client_closed == -1 || client_closed == 2) {
+        //         write(curr->sock_fd, tryagain, strlen(tryagain));
         //     }
-        // }
-    }
-    return 0;
+        //     if (client_closed == 1) { //the socket has been closed. 
+        //         //let the other player know
+        //         sprintf(terminated, "Player %d: %s has disconnected.", curr->sock_fd, curr->username);
+        //     }
+
+        // }        
+
+
+    } while (!sigint_received);
+
+    clean_exit(s, clients, exit_status);
+
 }

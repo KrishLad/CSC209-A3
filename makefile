@@ -1,13 +1,13 @@
-PORT=54640
-CFLAGS= -DPORT=$(PORT) -g -Wall
+PORT=58321
+CFLAGS = -DSERVER_PORT=$(PORT) -g -Wall -Werror -fsanitize=address
 
-all: battle  
+all: battle
 
-battle: battle.o
+battle: battle.o client.o helpers.o
 	gcc ${CFLAGS} -o $@ $^
 
-%.o: %.c 
-	${CC} ${CFLAGS}  -c $<
+%.o: %.c
+	gcc ${CFLAGS} -c $<
 
 clean:
-	rm *.o battleserver 
+	rm -f *.o battle
