@@ -178,21 +178,30 @@ void find_players(struct client_sock *top, struct client_sock **p1, struct clien
 
     struct client_sock *i = top;
     //finding player 1, if it exists
-    while (i != NULL && i->next != NULL) {
-        if ( (i->state == 1 || i->state == 2) && *p1 == NULL) {
+    while (i != NULL) {
+        printf("Name: %s State: %d\n", i->username, i->state);
+
+        if ((i->state == 1 || i->state == 2) && *p1 == NULL) {
             *p1 = i;
-            printf("Player 1: %s", (*p1)->username);
+            printf("Player 1: %s\n", (*p1)->username);
+        }
+        else if ((i->state == 1 || i->state == 2) && *p2 == NULL && *p1 != i) {
+            *p2 = i;
+            printf("Player 1: %s\n", (*p1)->username);
         }
         i = i->next;
     }
-    i = top;
-    while (i != NULL && i->next != NULL) {
-        if ( (i->state == 1 || i->state == 2) && *p1 != i && *p2 == NULL) {
-            if ((*p1)->state != 2 || i->state != 2) { //can't both have just finished
-                *p2 = i;
-                printf("Player 2: %s", (*p2)->username);
-            }
-        }
-        i = i->next;
+
+    printf("Finding players.\n");
+    if (*p1 == NULL) {
+        printf("Player 1: None\n");
+    } else {
+        printf("Player 1: %s\n", (*p1)->username);
     }
+    if (*p2 == NULL) {
+        printf("Player 2: None\n");
+    } else {
+        printf("Player 2: %s\n", (*p2)->username);
+    }
+
 }

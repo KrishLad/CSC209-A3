@@ -64,15 +64,18 @@ int main() {
     sa_sigint.sa_flags = 0;
     sigemptyset(&sa_sigint.sa_mask);
     sigaction(SIGINT, &sa_sigint, NULL);
-
+ 
     int exit_status = 0;
-
     int max_fd = s.sock_fd;
 
+    //setup file descriptor sets
     fd_set all_fds, listen_fds;
-
     FD_ZERO(&all_fds);
     FD_SET(s.sock_fd, &all_fds);
+
+    //setup players
+    struct client_sock *p1 = NULL;
+    struct client_sock *p2 = NULL;
 
     do {
         listen_fds = all_fds;
@@ -100,8 +103,11 @@ int main() {
             }
             FD_SET(client_fd, &all_fds);
             printf("Accepted connection\n");
+
             char *question = "What is your name? ";
             write(client_fd, question, strlen(question));
+
+            find_players(clients, &p1, &p2);
         }
 
         if (sigint_received) break;
@@ -111,6 +117,7 @@ int main() {
          * and send to all other connected clients.
          */
         struct client_sock *curr = clients;
+
         while (curr) {
             if (!FD_ISSET(curr->sock_fd, &listen_fds)) {
                 curr = curr->next;
@@ -133,6 +140,8 @@ int main() {
                 else {
                     printf("Client %d user name is %s.\n", curr->sock_fd, curr->username);
                     curr->state = 1; //player is ready to play
+
+                    find_players(clients, &p1, &p2);
                 }
             }
 
@@ -143,24 +152,6 @@ int main() {
             // char msg_buf[BUF_SIZE];
             // memset(msg_buf, 0, BUF_SIZE); 
             // strncat(msg_buf, message, MAX_USER_MSG);
-
-            // struct client_sock *dest_c = clients;
-            // while (dest_c) {
-            //     // Only attempt to send if the client hasn't received a message yet
-            //     if (dest_c != curr && dest_c->state != 1) {
-            //         if (write_buf_to_client(dest_c, msg_buf, strlen(msg_buf)) == 0) {
-            //             dest_c->state = 1; // Mark as message sent
-            //             printf("Sent message from %s (%d) to %s (%d).\n",
-            //                 curr->username, curr->sock_fd,
-            //                 dest_c->username, dest_c->sock_fd);
-            //         } else {
-            //             // Handle failed send, possibly resetting state or taking other action
-            //             printf("Couldn't send message.");
-            //         }
-            //     }
-
-            //     dest_c = dest_c->next;
-            // }           
 
             // char *msg;
             // while (client_closed == 0 && !get_message(&msg, curr->buf, &(curr->inbuf))) {
@@ -211,39 +202,46 @@ int main() {
             }
         }
 
-        //find the players for the next game
-        struct client_sock *p1 = NULL;
-        struct client_sock *p2 = NULL;
-        find_players(clients, &p1, &p2);
-        if (p1 != NULL && p2 != NULL) {
-            printf("Player 1: %s\n", p1->username);
-            printf("Player 2: %s\n", p2->username);
-        }
-
         //play the game!
-        // int power1 = 20;
-        // int power2 = 20;
-        // struct client_sock *curr = p1;
-        // int client_closed;
-        // char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
-        // char *tryagain = "Try again.\n(a) Regular move\n(p) Power move\n(s) Say something\n";
-        // char *terminated;
-        // while (power1 > 0 || power2 > 0) {
-            
-        //     //send the message to the player
-        //     write(curr->sock_fd, message, strlen(message));
+        // if (p1 != NULL && p2 != NULL) {
+        //     int power1 = 20;
+        //     int power2 = 20;
+        //     struct client_sock *curr_player = p1;
+        //     int client_closed;
+        //     char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
+        //     char *tryagain = "Try again.\n(a) Regular move\n(p) Power move\n(s) Say something\n";
+        //     char terminated[BUF_SIZE];
+        //     while (power1 > 0 || power2 > 0) {
+                
+        //         //send the message to the player
+        //         write(curr_player->sock_fd, message, strlen(message));
 
-        //     //while we run into an error getting the message, re prompt
-        //     client_closed = read_from_client(curr);
-        //     while (client_closed == -1 || client_closed == 2) {
-        //         write(curr->sock_fd, tryagain, strlen(tryagain));
-        //     }
-        //     if (client_closed == 1) { //the socket has been closed. 
-        //         //let the other player know
-        //         sprintf(terminated, "Player %d: %s has disconnected.", curr->sock_fd, curr->username);
-        //     }
+        //         //while we run into an error getting the message, re prompt
+        //         client_closed = read_from_client(curr_player);
+        //         while (client_closed == -1 || client_closed == 2) {
+        //             write(curr_player->sock_fd, tryagain, strlen(tryagain));
+        //         }
+        //         if (client_closed == 1) { //the socket has been closed. 
+        //             //let the other player know
+        //             memset(terminated, 0, BUF_SIZE);
+        //             sprintf(terminated, "Player %d: %s has disconnected.", curr_player->sock_fd, curr->username);
+        //             if (curr_player == p1) {
+        //                 write(p2->sock_fd, terminated, strlen(terminated));
+        //             } else {
+        //                 write(p1->sock_fd, terminated, strlen(terminated));
+        //             }
+        //         } else { //message is successful and CLRF terminated
+        //             char *move;
+        //             int err = get_message(&move, curr_player->buf, &(curr_player->inbuf));
+        //             if (err == 0) {
+        //                 printf("MOVE SELECTED: %s",move);
+        //             }
+        //         }
 
-        // }        
+        //     power1 -= 5;
+        //     power2 -= 5;
+        //     }
+        // }
 
 
     } while (!sigint_received);
