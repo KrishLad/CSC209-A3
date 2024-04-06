@@ -203,45 +203,45 @@ int main() {
         }
 
         //play the game!
-        // if (p1 != NULL && p2 != NULL) {
-        //     int power1 = 20;
-        //     int power2 = 20;
-        //     struct client_sock *curr_player = p1;
-        //     int client_closed;
-        //     char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
-        //     char *tryagain = "Try again.\n(a) Regular move\n(p) Power move\n(s) Say something\n";
-        //     char terminated[BUF_SIZE];
-        //     while (power1 > 0 || power2 > 0) {
+        if (p1 != NULL && p2 != NULL) {
+            int power1 = 20;
+            int power2 = 20;
+            struct client_sock *curr_player = p1;
+            int client_closed;
+            char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
+            char *tryagain = "Try again.\n(a) Regular move\n(p) Power move\n(s) Say something\n";
+            while (power1 > 0 || power2 > 0) {
                 
-        //         //send the message to the player
-        //         write(curr_player->sock_fd, message, strlen(message));
+                //send the message to the player
+                write(curr_player->sock_fd, message, strlen(message));
 
-        //         //while we run into an error getting the message, re prompt
-        //         client_closed = read_from_client(curr_player);
-        //         while (client_closed == -1 || client_closed == 2) {
-        //             write(curr_player->sock_fd, tryagain, strlen(tryagain));
-        //         }
-        //         if (client_closed == 1) { //the socket has been closed. 
-        //             //let the other player know
-        //             memset(terminated, 0, BUF_SIZE);
-        //             sprintf(terminated, "Player %d: %s has disconnected.", curr_player->sock_fd, curr->username);
-        //             if (curr_player == p1) {
-        //                 write(p2->sock_fd, terminated, strlen(terminated));
-        //             } else {
-        //                 write(p1->sock_fd, terminated, strlen(terminated));
-        //             }
-        //         } else { //message is successful and CLRF terminated
-        //             char *move;
-        //             int err = get_message(&move, curr_player->buf, &(curr_player->inbuf));
-        //             if (err == 0) {
-        //                 printf("MOVE SELECTED: %s",move);
-        //             }
-        //         }
+                //while we run into an error getting the message, re prompt
+                client_closed = read_from_client(curr_player);
+                while (client_closed == -1 || client_closed == 2) {
+                    write(curr_player->sock_fd, tryagain, strlen(tryagain));
+                    client_closed = read_from_client(curr_player);
+                }
+                if (client_closed == 1) { //the socket has been closed. 
+                    
+                    remove_client(&curr, &clients); //remove the client
 
-        //     power1 -= 5;
-        //     power2 -= 5;
-        //     }
-        // }
+                } else { //message is successful and CLRF terminated
+                    char *move;
+                    int err = get_message(&move, curr_player->buf, &(curr_player->inbuf));
+                    if (err == 0) {
+                        printf("MOVE SELECTED: %s",move);
+                    }
+                }
+
+                power1 -= 5;
+                power2 -= 5;
+                if (curr_player == p1) {
+                    curr_player = p2;
+                } else {
+                    curr_player = p1;
+                }
+            }
+        }
 
 
     } while (!sigint_received);
