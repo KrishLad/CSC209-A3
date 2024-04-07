@@ -106,8 +106,6 @@ int main() {
 
             char *question = "What is your name? ";
             write(client_fd, question, strlen(question));
-
-            find_players(clients, &p1, &p2);
         }
 
         if (sigint_received) break;
@@ -140,55 +138,8 @@ int main() {
                 else {
                     printf("Client %d user name is %s.\n", curr->sock_fd, curr->username);
                     curr->state = 1; //player is ready to play
-
-                    find_players(clients, &p1, &p2);
                 }
             }
-
-            //FROM HERE DOWN SHOULD BE IN GAME LOGIC! MEANING BEFORE THIS WE NEED TO FIND GAME STATE AND START GAME. IN WHILE LOOP?
-
-            // char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
-            // // Loop through buffer to get complete message(s)
-            // char msg_buf[BUF_SIZE];
-            // memset(msg_buf, 0, BUF_SIZE); 
-            // strncat(msg_buf, message, MAX_USER_MSG);
-
-            // char *msg;
-            // while (client_closed == 0 && !get_message(&msg, curr->buf, &(curr->inbuf))) {
-            //     printf("Echoing message from %s: %s\n", curr->username, msg);
-            //     char write_buf[BUF_SIZE];
-            //     memset(write_buf, 0, BUF_SIZE);
-            //     // write_buf[0] = '\0';
-            //     strncat(write_buf, curr->username, MAX_NAME);
-            //     strncat(write_buf, ": ", MAX_NAME);
-            //     strncat(write_buf, msg, MAX_USER_MSG);
-            //     strncat(write_buf, "\n", MAX_USER_MSG);
-            //     free(msg);
-            //     int data_len = strlen(write_buf);
-
-            //     struct client_sock *dest_c = clients;
-            //     while (dest_c) {
-            //         if (dest_c != curr) {
-            //             int ret = write_buf_to_client(dest_c, write_buf, data_len);
-            //             if (ret == 0) {
-            //                 printf("Sent message from %s (%d) to %s (%d).\n",
-            //                     curr->username, curr->sock_fd,
-            //                     dest_c->username, dest_c->sock_fd);
-            //             }
-            //             else {
-            //                 printf("Failed to send message to user %s (%d).\n", dest_c->username, dest_c->sock_fd);
-            //                 if (ret == 2) {
-            //                     printf("User %s (%d) disconnected.\n", dest_c->username, dest_c->sock_fd);
-            //                     close(dest_c->sock_fd);
-            //                     FD_CLR(dest_c->sock_fd, &all_fds);
-            //                     assert(remove_client(&dest_c, &clients) == 0); // If this fails we have a bug
-            //                     continue;
-            //                 }
-            //             }
-            //         }
-            //         dest_c = dest_c->next;
-            //     }
-            // }
 
             if (client_closed == 1) { // Client disconnected
                 // Note: Never reduces max_fd when client disconnects
@@ -202,47 +153,37 @@ int main() {
             }
         }
 
-        //play the game!
+        /*
+        * GAME LOGIC
+        */
+
+        //find the players
+        find_players(clients, &p1, &p2);
+
+        //play the game
+        int game = 0;
         if (p1 != NULL && p2 != NULL) {
-            int power1 = 20;
-            int power2 = 20;
-            struct client_sock *curr_player = p1;
-            int client_closed;
-            char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
-            char *tryagain = "Try again.\n(a) Regular move\n(p) Power move\n(s) Say something\n";
-            while (power1 > 0 || power2 > 0) {
-                
-                //send the message to the player
-                write(curr_player->sock_fd, message, strlen(message));
-
-                //while we run into an error getting the message, re prompt
-                client_closed = read_from_client(curr_player);
-                while (client_closed == -1 || client_closed == 2) {
-                    write(curr_player->sock_fd, tryagain, strlen(tryagain));
-                    client_closed = read_from_client(curr_player);
-                }
-                if (client_closed == 1) { //the socket has been closed. 
-                    
-                    remove_client(&curr, &clients); //remove the client
-
-                } else { //message is successful and CLRF terminated
-                    char *move;
-                    int err = get_message(&move, curr_player->buf, &(curr_player->inbuf));
-                    if (err == 0) {
-                        printf("MOVE SELECTED: %s",move);
-                    }
-                }
-
-                power1 -= 5;
-                power2 -= 5;
-                if (curr_player == p1) {
-                    curr_player = p2;
-                } else {
-                    curr_player = p1;
-                }
-            }
+            game = play_game(clients, p1, p2, all_fds);
         }
 
+        //update states: these two just played together so they can't play again.
+        if (game == 1) {
+            //set every player except the two who just played state's to be 1
+            struct client_sock *i = clients;
+            while (i != NULL) {
+                i->state = 1;
+                i = i->next;
+            }
+            p1->state = 2;
+            p2->state = 2;
+            p1 = NULL;
+            p2 = NULL;
+
+            //write message to tell players to wait
+            // char *waiting = "Awaiting another player\n";
+            // write_buf_to_client(p1, waiting, strlen(waiting));
+            // write_buf_to_client(p2, waiting, strlen(waiting));
+        }
 
     } while (!sigint_received);
 

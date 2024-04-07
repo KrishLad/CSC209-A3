@@ -177,31 +177,112 @@ int set_username(struct client_sock *curr) {
 void find_players(struct client_sock *top, struct client_sock **p1, struct client_sock **p2) {
 
     struct client_sock *i = top;
-    //finding player 1, if it exists
+
     while (i != NULL) {
-        printf("Name: %s State: %d\n", i->username, i->state);
 
         if ((i->state == 1 || i->state == 2) && *p1 == NULL) {
             *p1 = i;
-            printf("Player 1: %s\n", (*p1)->username);
         }
         else if ((i->state == 1 || i->state == 2) && *p2 == NULL && *p1 != i) {
-            *p2 = i;
-            printf("Player 1: %s\n", (*p1)->username);
+            if ( ((*p1)->state == 2 && i->state == 1) || ((*p1)->state == 1)) {
+                *p2 = i;
+            }
         }
+
         i = i->next;
     }
+}
 
-    printf("Finding players.\n");
-    if (*p1 == NULL) {
-        printf("Player 1: None\n");
-    } else {
-        printf("Player 1: %s\n", (*p1)->username);
+int play_game(struct client_sock *top, struct client_sock *p1, struct client_sock *p2, fd_set all_fds) {
+
+    int power1 = 20, power2 = 20;
+    struct client_sock *player = p1;
+    struct client_sock *waiter = p2;
+    char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
+    int client_closed = 0;
+    char *move;
+
+    //send welcome message to both players
+    char welcomep1[BUF_SIZE];
+    sprintf(welcomep1, "Welcome! You are playing %s.\nYour hitpoints:%d\nYour powermoves:%d\n", p2->username, power1, 1);
+    write_buf_to_client(player, welcomep1, strlen(welcomep1));
+
+    char welcomep2[BUF_SIZE];
+    sprintf(welcomep2, "Welcome! You are playing %s.\nYour hitpoints:%d\nYour powermoves:%d\n", p1->username, power2, 1);
+    write_buf_to_client(waiter, welcomep2, strlen(welcomep2));
+
+    while (power1 > 0 && power2 > 0) {
+        int *power;
+        if (player == p1) {
+            power = &power2;
+        } else {
+            power = &power1;
+        }
+
+        //send information to the waiter
+        char waitmsg[BUF_SIZE];
+        sprintf(waitmsg, "Player %s is playing...\nThey have %d points\n",player->username, *power);
+        write_buf_to_client(waiter, waitmsg, strlen(waitmsg));
+
+        //send information to player
+        write_buf_to_client(player, message, strlen(message));
+        client_closed = read_from_client(player);
+
+        if (client_closed == -1 || client_closed == 1) {
+            FD_CLR(player->sock_fd, &all_fds);
+            close(player->sock_fd);
+            printf("Client %d disconnected\n", player->sock_fd);
+            assert(remove_client(&player, &top) == 0); // If this fails we have a bug
+
+            return 0;
+        }
+        else if (client_closed == 0) {
+            
+            int err = get_message(&move, player->buf, &(player->inbuf));
+
+            if (err == 1) {
+                char *msg_error = "Could not get message.\n";
+                write_buf_to_client(player, msg_error, strlen(msg_error));
+            } else { // err = 0
+                if (strcmp(move, "a") == 0) {
+                    *power -= 5;
+                } else if(strcmp(move, "p") == 0) {
+                    *power -= 8;
+                } else if(strcmp(move, "s") == 0) {
+                    printf("Take message");
+                } else if (strcmp(move, "a") != 0 && strcmp(move, "p") != 0 && strcmp(move, "p") != 0){
+                    char *inp_error = "Not a valid move.";
+                    write_buf_to_client(player, inp_error, strlen(inp_error));
+                }
+            }
+        }
+
+        //check who is winning / losing
+        char *winner;
+        if (power1 <= 0) {
+            winner = "Player 2 won.\n";
+            write_buf_to_client(p1, winner, strlen(winner));
+            write_buf_to_client(p2, winner, strlen(winner));
+
+            return 1;
+        } else if (power2 <= 0) {
+            winner = "Player 1 won.\n";
+            write_buf_to_client(p1, winner, strlen(winner));
+            write_buf_to_client(p2, winner, strlen(winner));
+
+            return 1;
+        }
+        
+        if ( (strcmp(move, "a") == 0 || strcmp(move, "p") == 0) && player == p1) {
+            waiter = p1;
+            player = p2;
+        } else if ( (strcmp(move, "a") == 0 || strcmp(move, "p") == 0) && player == p2 ){
+            waiter = p2;
+            player = p1;
+        }
     }
-    if (*p2 == NULL) {
-        printf("Player 2: None\n");
-    } else {
-        printf("Player 2: %s\n", (*p2)->username);
-    }
+
+    free(move);
+    return 0; 
 
 }
