@@ -80,6 +80,6 @@ void find_players(struct client_sock *top, struct client_sock **p1, struct clien
 /* Play the game
 * Return 0 if the game does not work and 1 if the game works
 */
-int play_game(struct client_sock *top, struct client_sock *p1, struct client_sock *p2, fd_set all_fds);
+int play_game(struct client_sock *top, struct client_sock *p1, struct client_sock *p2, fd_set *all_fds);
 
 #endif
