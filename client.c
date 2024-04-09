@@ -213,6 +213,7 @@ int play_game(struct client_sock *top, struct client_sock *p1, struct client_soc
     struct client_sock *waiter = p2;
     char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n(h) Heal yourself\n";
     int client_closed = 0;
+    int waiter_closed = 0;
     char *move;
 
     //send welcome messages to players
@@ -264,6 +265,20 @@ int play_game(struct client_sock *top, struct client_sock *p1, struct client_soc
         client_closed = read_from_client(player);
         printf("Read from client returned %d\n",client_closed);
 
+        waiter_closed = read_from_client(waiter);
+        if (waiter_closed == 1){
+            FD_CLR(waiter->sock_fd, all_fds);
+            close(waiter->sock_fd);
+
+
+            char disconnect_msg[BUF_SIZE];
+            sprintf(disconnect_msg, "--%s dropped. You win!", waiter->username);
+            write_buf_to_client(player, disconnect_msg, strlen(disconnect_msg));
+
+            remove_client(&waiter, &top);
+
+            return 0;
+        }
         //check message 
         //handle case where we can't read
         if (client_closed == -1 || client_closed == 1) {
