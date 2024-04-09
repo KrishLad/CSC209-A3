@@ -83,19 +83,20 @@ int read_from_socket(int sock_fd, char *buf, int *inbuf) {
     buf[*inbuf] = '\0';
 
     // Check if we have a full message (look for "\r\n")
-    if (find_network_newline(buf, *inbuf) > 0) {
+    if (strchr(buf, '\n') != NULL) {
         return 0; // Full message ready
     } else {
         return 2; // Partial message; need more data
     }
 }
 
+
 int get_message(char **dst, char *src, int *inbuf) {
     int location = find_network_newline(src, *inbuf);
     if (location == -1) {
         return 1;
     }
-    //if location > 0, it is actually the length of the message to print
+    //if network newline is found, location will be at least 2
     *dst = malloc(location-1);
     strncpy(*dst, src, location - 2);
     (*dst)[location-2]='\0';
