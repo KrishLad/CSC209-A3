@@ -142,8 +142,6 @@ int remove_client(struct client_sock **curr, struct client_sock **clients) {
 }
 
 /*
- * Read incoming bytes from client.
- *
  * Return -1 if read error or maximum message size is exceeded.
  * Return 0 upon receipt of CRLF-terminated message.
  * Return 1 if client socket has been closed.
@@ -193,96 +191,254 @@ void find_players(struct client_sock *top, struct client_sock **p1, struct clien
     }
 }
 
-int play_game(struct client_sock *top, struct client_sock *p1, struct client_sock *p2, fd_set all_fds) {
+int play_game(struct client_sock *top, struct client_sock *p1, struct client_sock *p2, fd_set *all_fds) {
 
-    int power1 = 20, power2 = 20;
+    //so that the buffer is empty whenever we start a new game
+    memset(p1->buf, 0, BUF_SIZE);
+    memset(p2->buf, 0, BUF_SIZE);
+    p1->inbuf = 0;
+    p2->inbuf = 0;
+
+    //want the hitpoints of each player to be at least 20
+    int power1 = 20 + (rand() % 5);
+    int power2 = 20 + (rand() % 5);
+    //want each player to have at least 1 power move
+    int powermoves1 = 1 + (rand() % 4);
+    int powermoves2 = 1 + (rand() % 4);
+    // healing moves for both players. min 1, max 3
+    int healsp1 = 1 + (rand() % 3);
+    int healsp2 = 1 + (rand() % 3);
+
     struct client_sock *player = p1;
     struct client_sock *waiter = p2;
-    char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n";
+    char *message = "(a) Regular move\n(p) Power move\n(s) Say something\n(h) Heal yourself\n";
     int client_closed = 0;
     char *move;
 
-    //send welcome message to both players
-    char welcomep1[BUF_SIZE];
-    sprintf(welcomep1, "Welcome! You are playing %s.\nYour hitpoints:%d\nYour powermoves:%d\n", p2->username, power1, 1);
-    write_buf_to_client(player, welcomep1, strlen(welcomep1));
+    //send welcome messages to players
+    char welcome_player1[BUF_SIZE];
+    sprintf(welcome_player1, "Welcome! You are playing %s.\nYour hitpoints: %d\nYour powermoves: %d\n", waiter->username, power1, powermoves1);
+    write_buf_to_client(player, welcome_player1, strlen(welcome_player1));
 
-    char welcomep2[BUF_SIZE];
-    sprintf(welcomep2, "Welcome! You are playing %s.\nYour hitpoints:%d\nYour powermoves:%d\n", p1->username, power2, 1);
-    write_buf_to_client(waiter, welcomep2, strlen(welcomep2));
-
+    char welcome_player2[BUF_SIZE];
+    sprintf(welcome_player2, "Welcome! You are playing %s.\n", player->username);
+    write_buf_to_client(waiter, welcome_player2, strlen(welcome_player2));
+    
+    int max_health_p1 = power1;
+    int max_health_p2 = power2; 
+    //turn logic
     while (power1 > 0 && power2 > 0) {
-        int *power;
+
+        //reduces the number of if - else statements we have to use
+        int *player_power, *waiter_power;
+        int *waiter_moves, *player_moves;
+        int *player_heals, *waiter_heals;
+        int *player_max;
         if (player == p1) {
-            power = &power2;
+            player_power = &power1;
+            waiter_power = &power2;
+            waiter_moves = &powermoves2;
+            player_moves = &powermoves1;
+            player_heals = &healsp1;
+            waiter_heals = &healsp2;
+            player_max = &max_health_p1;
         } else {
-            power = &power1;
+            player_power = &power2;
+            waiter_power = &power1;
+            waiter_moves = &powermoves1;
+            player_moves = &powermoves2;
+            player_heals = &healsp2;
+            waiter_heals = &healsp2;
+            player_max = &max_health_p2;
         }
 
         //send information to the waiter
-        char waitmsg[BUF_SIZE];
-        sprintf(waitmsg, "Player %s is playing...\nThey have %d points\n",player->username, *power);
-        write_buf_to_client(waiter, waitmsg, strlen(waitmsg));
+        char waiter_msg[BUF_SIZE];
+        sprintf(waiter_msg, "\nYour hitpoints: %d\nYour powermoves: %d\nYour healing moves: %d\n\n%s's hitpoints: %d\n",*waiter_power, *waiter_moves,*waiter_heals,player->username, *player_power);
+        write_buf_to_client(waiter, waiter_msg, strlen(waiter_msg));
 
-        //send information to player
+        //send prompt to the player
         write_buf_to_client(player, message, strlen(message));
-        client_closed = read_from_client(player);
 
+        //check if available for reading
+        client_closed = read_from_client(player);
+        printf("Read from client returned %d\n",client_closed);
+
+        //check message 
+        //handle case where we can't read
         if (client_closed == -1 || client_closed == 1) {
-            FD_CLR(player->sock_fd, &all_fds);
+
+            FD_CLR(player->sock_fd, all_fds);
             close(player->sock_fd);
-            printf("Client %d disconnected\n", player->sock_fd);
-            assert(remove_client(&player, &top) == 0); // If this fails we have a bug
+            
+            char close_msg[BUF_SIZE];
+            sprintf(close_msg, "--%s dropped. You win!", player->username);
+            write_buf_to_client(waiter, close_msg, strlen(close_msg));
+
+            remove_client(&player, &top);
 
             return 0;
-        }
-        else if (client_closed == 0) {
+
+        } else if (client_closed == 2 || client_closed == 0) {
+
+            //we add a network newline
+            if (strlen(player->buf) == 1) {
+                player->buf[1] = '\r';
+                player->buf[2] = '\n';
+                player->inbuf += 2;
+            }
+            else {
+                memset(player->buf, 0, BUF_SIZE);
+                player->inbuf = 0;
+                continue;
+            }
             
+            //read the message
             int err = get_message(&move, player->buf, &(player->inbuf));
 
-            if (err == 1) {
+            if (err == 1) { //can't read the message
                 char *msg_error = "Could not get message.\n";
                 write_buf_to_client(player, msg_error, strlen(msg_error));
-            } else { // err = 0
+
+                break;
+            } else { 
                 if (strcmp(move, "a") == 0) {
-                    *power -= 5;
+
+                    int deduc = rand() % 6;
+                    *waiter_power -= deduc;
+                    char hit_msg[BUF_SIZE];
+                    sprintf(hit_msg, "You hit %s for %d points.\n",waiter->username, deduc);
+                    write_buf_to_client(player, hit_msg, strlen(hit_msg));
+
                 } else if(strcmp(move, "p") == 0) {
-                    *power -= 8;
+
+                    int hit_or_not = rand() % 3;
+                    int deduc = 10 + (rand() % 10);
+
+                    if ((*player_moves) <= 0) {
+                        if ((*player_heals)<= 0){
+                            message = "(a) Regular move\n(s) Say something\n";
+                            continue;
+                        }
+                        else{
+                            message = "(a) Regular move\n(s) Say something\n(h) Heal yourself\n";
+                            continue;
+                        }   
+                    } else {
+                        if (hit_or_not == 1) { //powermove hits
+                            *waiter_power -= deduc;
+                            char hit_msg2[BUF_SIZE];
+                            sprintf(hit_msg2, "You hit %s for %d points.\n",waiter->username, deduc);
+                            write_buf_to_client(player, hit_msg2, strlen(hit_msg2));
+                        } else {
+                            char *missed_msg = "You missed.\n";
+                            write_buf_to_client(player, missed_msg, strlen(missed_msg));
+                        }
+                        
+                        *player_moves -= 1;
+                    }
+
                 } else if(strcmp(move, "s") == 0) {
-                    printf("Take message");
-                } else if (strcmp(move, "a") != 0 && strcmp(move, "p") != 0 && strcmp(move, "p") != 0){
-                    char *inp_error = "Not a valid move.";
+
+                    char *prompt = "Type message: ";
+                    write_buf_to_client(player, prompt, strlen(prompt));
+
+                    int msg_okay = 2;
+                    while (msg_okay == 2) {
+                        msg_okay = read_from_client(player);
+                    }
+
+                    char *newline_pos = strchr(player->buf, '\n');
+                    if (newline_pos != NULL) {
+                        // Found a newline, check if it's already part of a network newline
+                        if (newline_pos > player->buf && *(newline_pos - 1) != '\r') {
+                            *newline_pos = '\r'; // Replace '\n' with '\r'
+                            // Ensure there's enough space to shift and insert '\n'
+                            memmove(newline_pos + 2, newline_pos + 1, strlen(newline_pos + 1) + 1);
+                            player->inbuf += 1;
+                            *(newline_pos + 1) = '\n'; // Insert '\n' after '\r'
+                        }
+                    }
+
+                    char *msg_to_send;
+                    get_message(&msg_to_send, player->buf, &(player->inbuf));
+                    write_to_socket(waiter->sock_fd, msg_to_send, strlen(msg_to_send));
+
+
+                }
+                else if(strcmp(move , "h") == 0){ // if the player selects a healing move.
+                    int value =1+ (rand() % 10); // I just choose the first number off the top of my head.
+                    if((*player_power) == (*player_max)){ // Will not allow them to heal at full health 
+                        char *out = "You are at full health, you cannot use a heal\n"; 
+                        write_buf_to_client(player,out,strlen(out));
+                        continue;
+                    } 
+                    else if ((*player_heals)  <= 0){
+                       if ((*player_moves) <= 0){ 
+                           message = "(a) Regular move\n(s) Say something\n";
+                           continue;
+                       } else{
+                           message = "(a) Regular move\n(p) Power move \n(s) Say something\n";
+                           continue;
+                       }
+                    }
+                    else{
+                        int check = (*player_power) + value; 
+                        while(check > (*player_max)){
+                            value = 1 + (rand() % 10); //reroll the number.
+                            check = (*player_power) + value; 
+                        }
+                        *player_power += value;
+                        char healing_msg[16]; 
+                        sprintf(healing_msg, "You healed %d HP", value);
+                        write_buf_to_client(player, healing_msg, strlen(healing_msg));
+                        *player_heals -= 1;
+                    }
+                }
+                else if (strcmp(move, "a") != 0 && strcmp(move, "p") != 0 && strcmp(move, "s") != 0 && strcmp(move, "h") != 0)
+                {
+
+                    char *inp_error = "\nNot a valid move.\n";
                     write_buf_to_client(player, inp_error, strlen(inp_error));
                 }
             }
         }
 
+        if ((*player_heals > 0) && (*player_power <=0)){
+            message = "(a) Regular move\n(s) Say something\n(h) Heal yourself\n"; 
+        }
+        else if ((*player_heals <= 0) && (*player_power > 0)){
+            message = "(a) Regular move\n(p) Power move \n(s) Say something\n"; 
+
+        }
+        else if ((*player_heals <= 0) && (*player_power <= 0)){
+            message = "(a) Regular move\n(p) Power move \n(s) Say something\n";
+        }
+
         //check who is winning / losing
-        char *winner;
+        char *winner = "You won!\n";
+        char *loser = "You lost.\n";
         if (power1 <= 0) {
-            winner = "Player 2 won.\n";
-            write_buf_to_client(p1, winner, strlen(winner));
+            write_buf_to_client(p1, loser, strlen(loser));
             write_buf_to_client(p2, winner, strlen(winner));
 
             return 1;
         } else if (power2 <= 0) {
-            winner = "Player 1 won.\n";
             write_buf_to_client(p1, winner, strlen(winner));
-            write_buf_to_client(p2, winner, strlen(winner));
+            write_buf_to_client(p2, loser, strlen(loser));
 
             return 1;
         }
         
-        if ( (strcmp(move, "a") == 0 || strcmp(move, "p") == 0) && player == p1) {
+        if ( (strcmp(move, "a") == 0 || strcmp(move, "p") == 0 || strcmp(move, "h") == 0) && player == p1) {
             waiter = p1;
             player = p2;
-        } else if ( (strcmp(move, "a") == 0 || strcmp(move, "p") == 0) && player == p2 ){
+        } else if ( (strcmp(move, "a") == 0 || strcmp(move, "p") == 0 || strcmp(move, "h") == 0) && player == p2 ){
             waiter = p2;
             player = p1;
         }
     }
 
-    free(move);
     return 0; 
 
 }
