@@ -106,49 +106,77 @@ int main() {
 
             char *question = "What is your name? ";
             write(client_fd, question, strlen(question));
+
         }
 
         if (sigint_received) break;
 
-        /*
-         * Accept incoming messages from clients,
-         * and send to all other connected clients.
-         */
         struct client_sock *curr = clients;
 
         while (curr) {
+
             if (!FD_ISSET(curr->sock_fd, &listen_fds)) {
                 curr = curr->next;
                 continue;
             }
-            int client_closed = read_from_client(curr);
+
+            int client_closed = 2;
+            while (client_closed == 2) {
+                client_closed = read_from_client(curr);
+            }
 
             // If error encountered when receiving data
             if (client_closed == -1) {
                 client_closed = 1; // Disconnect the client
             }
 
-            // If received at least one complete message
-            // and client is newly connected: Get username
-            if (client_closed == 0 && curr->username == NULL) {
-                if (set_username(curr)) {
-                    printf("Error processing user name from client %d.\n", curr->sock_fd);
-                    client_closed = 1; // Disconnect the client
+            if (client_closed == 0  && curr->username == NULL) {
+
+                char *newline_pos = strchr(curr->buf, '\n');
+                if (newline_pos != NULL) {
+                    // Found a newline, check if it's already part of a network newline
+                    if (newline_pos > curr->buf && *(newline_pos - 1) != '\r') {
+                        *newline_pos = '\r'; // Replace '\n' with '\r'
+                        // Ensure there's enough space to shift and insert '\n'
+                        memmove(newline_pos + 2, newline_pos + 1, strlen(newline_pos + 1) + 1);
+                        curr->inbuf += 1;
+                        *(newline_pos + 1) = '\n'; // Insert '\n' after '\r'
+                    }
                 }
-                else {
-                    printf("Client %d user name is %s.\n", curr->sock_fd, curr->username);
-                    curr->state = 1; //player is ready to play
+
+                // Here you should already have the complete username in curr->buf
+                if (!set_username(curr)) {
+                    printf("Username set successfully: %s\n", curr->username);
+                    char message[40];
+                    sprintf(message, "Welcome %s! Awaiting opponent...\n", curr->username);
+                    write(curr->sock_fd, message, sizeof(message));
+                    curr->state = 1;
+                } else {
+                    printf("Failed to set username.\n");
                 }
+
             }
 
             if (client_closed == 1) { // Client disconnected
                 // Note: Never reduces max_fd when client disconnects
                 FD_CLR(curr->sock_fd, &all_fds);
                 close(curr->sock_fd);
-                printf("Client %d disconnected\n", curr->sock_fd);
-                assert(remove_client(&curr, &clients) == 0); // If this fails we have a bug
+
+                // //alert all other clients that a player has left
+                // struct client_sock *rec2 = clients;
+                // while (rec2) {
+                //     if (rec2 != curr) {
+                //         char left_msg[BUF_SIZE];
+                //         sprintf(left_msg, "%s left the arena.\n", curr->username);
+                //         write_buf_to_client(rec2, left_msg, strlen(left_msg));
+                //     }
+                //     rec2 = rec2->next;
+                // }
+
+                remove_client(&curr, &clients);
             }
             else {
+                
                 curr = curr->next;
             }
         }
@@ -157,13 +185,19 @@ int main() {
         * GAME LOGIC
         */
 
-        //find the players
+        // printf("ALL PLAYERS\n");
+        // struct client_sock *printer = clients;
+        // while (printer) {
+        //     printf("%s %d\n", printer->username, printer->state);
+        //     printer = printer->next;
+        // }
+
         find_players(clients, &p1, &p2);
 
         //play the game
         int game = 0;
         if (p1 != NULL && p2 != NULL) {
-            game = play_game(clients, p1, p2, all_fds);
+            game = play_game(clients, p1, p2, &all_fds);
         }
 
         //update states: these two just played together so they can't play again.
@@ -176,13 +210,12 @@ int main() {
             }
             p1->state = 2;
             p2->state = 2;
+            
             p1 = NULL;
             p2 = NULL;
-
-            //write message to tell players to wait
-            // char *waiting = "Awaiting another player\n";
-            // write_buf_to_client(p1, waiting, strlen(waiting));
-            // write_buf_to_client(p2, waiting, strlen(waiting));
+        } else {
+            p1 = NULL;
+            p2 = NULL;
         }
 
     } while (!sigint_received);
