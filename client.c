@@ -264,7 +264,7 @@ int play_game(struct client_sock *top, struct client_sock *p1, struct client_soc
 
         //check if available for reading
         client_closed = read_from_client(player);
-        printf("Read from client returned %d\n",client_closed);
+        // printf("Read from client returned %d\n",client_closed);
 
         // waiter_closed = check_socket_closed(waiter);
         // if (waiter_closed == 0){
@@ -288,7 +288,8 @@ int play_game(struct client_sock *top, struct client_sock *p1, struct client_soc
             close(player->sock_fd);
             
             char close_msg[BUF_SIZE];
-            sprintf(close_msg, "--%s dropped. You win!", player->username);
+            sprintf(close_msg, "--%s dropped. You win!\nAwaiting next player...", player->username);
+            
             write_buf_to_client(waiter, close_msg, strlen(close_msg));
 
             remove_client(&player, &top);
